@@ -8,12 +8,21 @@ st.set_page_config(page_title="Global Sales Dashboard", layout="wide")
 def load_data():
     df = pd.read_csv("global_sales.csv")
     df.columns = df.columns.str.strip().str.lower()
-    df["invoicedate"] = pd.to_datetime(df["invoicedate"])
-    df["sales"] = df["quantity"] * df["unitprice"]
-    df = df[df["sales"] > 0]
-    return df
 
-df = load_data()
+    date_col = next(c for c in df.columns if "date" in c)
+    qty_col = next(c for c in df.columns if "quant" in c)
+    price_col = next(c for c in df.columns if "price" in c)
+    country_col = next(c for c in df.columns if "country" in c)
+    invoice_col = next(c for c in df.columns if "invoice" in c)
+    customer_col = next(c for c in df.columns if "customer" in c)
+
+    df[date_col] = pd.to_datetime(df[date_col])
+    df["sales"] = df[qty_col] * df[price_col]
+    df = df[df["sales"] > 0]
+
+    return df, date_col, country_col, invoice_col, customer_col
+
+df, date_col, country_col, invoice_col, customer_col = load_data()
 
 st.title("Global Sales Analytics Dashboard")
 st.markdown("Interactive dashboard exploring global sales performance, customer behavior, and country-level insights.")
@@ -22,15 +31,15 @@ st.sidebar.header("Dashboard Filters")
 
 countries = st.sidebar.multiselect(
     "Select Countries",
-    sorted(df["country"].unique()),
-    default=df["country"].unique()[:5]
+    sorted(df[country_col].unique()),
+    default=sorted(df[country_col].unique())[:5]
 )
 
 years = st.sidebar.slider(
     "Select Year Range",
-    int(df["invoicedate"].dt.year.min()),
-    int(df["invoicedate"].dt.year.max()),
-    (2010, 2011)
+    int(df[date_col].dt.year.min()),
+    int(df[date_col].dt.year.max()),
+    (int(df[date_col].dt.year.min()), int(df[date_col].dt.year.max()))
 )
 
 months = st.sidebar.multiselect(
@@ -40,46 +49,49 @@ months = st.sidebar.multiselect(
 )
 
 filtered_df = df[
-    (df["country"].isin(countries)) &
-    (df["invoicedate"].dt.year.between(years[0], years[1])) &
-    (df["invoicedate"].dt.month.isin(months))
+    (df[country_col].isin(countries)) &
+    (df[date_col].dt.year.between(years[0], years[1])) &
+    (df[date_col].dt.month.isin(months))
 ]
 
 total_sales = filtered_df["sales"].sum()
-total_customers = filtered_df["customerid"].nunique()
-avg_order_value = filtered_df.groupby("invoiceno")["sales"].sum().mean()
-total_orders = filtered_df["invoiceno"].nunique()
+total_customers = filtered_df[customer_col].nunique()
+total_orders = filtered_df[invoice_col].nunique()
 
-col1, col2, col3, col4 = st.columns(4)
+order_level = (
+    filtered_df
+    .groupby(invoice_col, as_index=False)["sales"]
+    .sum()
+)
 
-col1.metric("💰 Total Sales", f"${total_sales:,.0f}")
-col2.metric("👥 Total Customers", f"{total_customers:,}")
-col3.metric("🧾 Total Orders", f"{total_orders:,}")
-col4.metric("📦 Avg Order Value", f"${avg_order_value:,.2f}")
+avg_order_value = order_level["sales"].mean()
 
-st.divider()
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("💰 Total Sales", f"${total_sales:,.0f}")
+c2.metric("👥 Total Customers", f"{total_customers:,}")
+c3.metric("🧾 Total Orders", f"{total_orders:,}")
+c4.metric("📦 Avg Order Value", f"${avg_order_value:,.2f}")
 
 sales_by_year = (
-    filtered_df.groupby(filtered_df["invoicedate"].dt.year)["sales"]
+    filtered_df
+    .groupby(filtered_df[date_col].dt.year)["sales"]
     .sum()
     .reset_index(name="total_sales")
 )
 
-fig_sales_trend = px.line(
+fig_trend = px.line(
     sales_by_year,
-    x="invoicedate",
+    x=date_col,
     y="total_sales",
     markers=True,
-    title="Global Sales Trend Over Time",
-    labels={"invoicedate": "Year", "total_sales": "Total Sales"}
+    title="Global Sales Trend Over Time"
 )
 
-st.plotly_chart(fig_sales_trend, use_container_width=True)
-
-st.divider()
+st.plotly_chart(fig_trend, use_container_width=True)
 
 country_sales = (
-    filtered_df.groupby("country")["sales"]
+    filtered_df
+    .groupby(country_col)["sales"]
     .sum()
     .reset_index()
     .sort_values("sales", ascending=False)
@@ -89,67 +101,56 @@ country_sales = (
 fig_country_sales = px.bar(
     country_sales,
     x="sales",
-    y="country",
+    y=country_col,
     orientation="h",
-    title="Top 10 Countries by Total Sales",
-    labels={"sales": "Total Sales", "country": "Country"}
+    title="Top 10 Countries by Total Sales"
 )
 
 st.plotly_chart(fig_country_sales, use_container_width=True)
 
-st.divider()
-
 monthly_sales = (
-    filtered_df.groupby(filtered_df["invoicedate"].dt.month)["sales"]
+    filtered_df
+    .groupby(filtered_df[date_col].dt.month)["sales"]
     .sum()
     .reset_index(name="total_sales")
 )
 
 fig_monthly = px.area(
     monthly_sales,
-    x="invoicedate",
+    x=date_col,
     y="total_sales",
-    title="Seasonal Sales Pattern by Month",
-    labels={"invoicedate": "Month", "total_sales": "Total Sales"}
+    title="Seasonal Sales Pattern"
 )
 
 st.plotly_chart(fig_monthly, use_container_width=True)
 
-st.divider()
-
 country_perf = (
-    filtered_df.groupby("country")
+    filtered_df
+    .groupby(country_col)
     .agg(
         total_sales=("sales", "sum"),
-        total_orders=("invoiceno", "nunique")
+        total_orders=(invoice_col, "nunique")
     )
     .reset_index()
     .sort_values("total_sales", ascending=False)
     .head(10)
 )
 
-fig_country_perf = px.bar(
+fig_perf = px.bar(
     country_perf,
     x="total_sales",
-    y="country",
+    y=country_col,
     orientation="h",
     color="total_orders",
-    color_continuous_scale="blues",
-    title="Top Countries: Sales & Order Volume",
-    labels={
-        "total_sales": "Total Sales",
-        "country": "Country",
-        "total_orders": "Order Volume"
-    }
+    title="Top Countries: Sales vs Orders"
 )
 
-st.plotly_chart(fig_country_perf, use_container_width=True)
-
-st.divider()
+st.plotly_chart(fig_perf, use_container_width=True)
 
 aov_country = (
-    filtered_df.groupby("country")
-    .apply(lambda x: x.groupby("invoiceno")["sales"].sum().mean())
+    filtered_df
+    .groupby(country_col)
+    .apply(lambda x: x.groupby(invoice_col)["sales"].sum().mean())
     .reset_index(name="avg_order_value")
     .sort_values("avg_order_value", ascending=False)
     .head(10)
@@ -158,15 +159,12 @@ aov_country = (
 fig_aov = px.bar(
     aov_country,
     x="avg_order_value",
-    y="country",
+    y=country_col,
     orientation="h",
-    title="Top Countries by Average Order Value",
-    labels={"avg_order_value": "Average Order Value", "country": "Country"}
+    title="Top Countries by Average Order Value"
 )
 
 st.plotly_chart(fig_aov, use_container_width=True)
-
-st.divider()
 
 st.subheader("Filtered Dataset Preview")
 st.dataframe(filtered_df.head(100))
